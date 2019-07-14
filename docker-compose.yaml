@@ -1,0 +1,207 @@
+version: '3.6'
+
+services:
+
+# https://github.com/portainer/portainer
+  portainer:
+    image: portainer/portainer:1.21.0
+    container_name: portainer
+    restart: always
+    command: -H unix:///var/run/docker.sock
+    ports:
+      - 9001:9000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${USERDIR}/docker_files/portainer/data:/data
+    environment:
+      - TZ=${TZ}
+
+# https://github.com/influxdata/influxdb
+  influxdb:
+    image: influxdb:1.7.6
+    container_name: influxdb
+    restart: unless-stopped
+    network_mode: host
+    ports:
+      - 8086:8086
+    volumes:
+      - ${USERDIR}/docker_files/influxdb:/var/lib/influxdb
+    environment:
+      - TZ=${TZ}
+    healthcheck:
+      test: ["CMD", "curl", "-sI", "http://192.168.0.163:8086/ping"]
+      interval: 30s
+      timeout: 1s
+      retries: 24
+
+# https://github.com/influxdata/chronograf
+  chronograf:
+    image: chronograf:1.7.12
+    container_name: chronograf
+    restart: unless-stopped
+    network_mode: host
+    ports:
+      - 8888:8888
+    environment:
+      - TZ=${TZ}
+    depends_on:
+      - influxdb
+
+# https://github.com/grafana/grafana
+  grafana:
+    image: grafana/grafana:6.2.5
+    container_name: grafana
+    restart: unless-stopped
+    user: "1000"
+    network_mode: host
+    ports:
+      - 3000:3000
+    volumes:
+      - ${USERDIR}/docker_files/grafana:/var/lib/grafana
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - influxdb
+
+# https://github.com/eclipse/mosquitto
+  mosquitto:
+    image: eclipse-mosquitto:1.6.3
+    container_name: mosquitto
+    restart: unless-stopped
+    user: 104:107
+    network_mode: host
+    ports:
+      - 1883:1883
+    volumes:
+      - ${USERDIR}/docker_files/mosquitto/config:/mosquitto/config
+      - ${USERDIR}/docker_files/mosquitto/log:/mosquitto/log
+      - ${USERDIR}/docker_files/mosquitto/data:/mosquitto/data
+      - /etc/localtime:/etc/localtime:ro
+
+# https://github.com/home-assistant/home-assistant
+  home-assistant:
+    image: homeassistant/raspberrypi2-homeassistant:0.95.4
+    container_name: homeassistant
+    restart: unless-stopped
+    network_mode: host
+    ports:
+      - 8123:8123
+    volumes:
+      - ${USERDIR}/docker_files/homeassistant/config:/config
+      - ${USERDIR}/docker_files/homeassistant/config/.ssh:/root/.ssh
+      - /etc/localtime:/etc/localtime:ro
+    privileged: true
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    depends_on:
+      - influxdb
+      - mosquitto
+      - letsencrypt
+#    healthcheck:
+#      test: ["CMD", "curl", "-f", "http://192.168.0.163:8123"]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 6
+
+# https://github.com/node-red/node-red
+  node-red:
+    image: nodered/node-red-docker:rpi-v8
+    container_name: nodered
+    restart: always
+    user: "1000"
+    network_mode: host
+    ports:
+      - 1880:1880
+    volumes:
+      - ${USERDIR}/docker_files/nodered/data:/data
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - home-assistant
+
+# https://github.com/ChristianKuehnel/plantgateway
+  plantgateway:
+    image: pschmitt/plantgateway:latest
+    container_name: plantgateway
+    restart: "no"
+    network_mode: host
+    volumes:
+      - ${USERDIR}/docker_files/homeassistant/config/plantgw.yaml:/config/plantgw.yaml
+    environment:
+      - TZ=${TZ}
+    depends_on:
+      - mosquitto
+
+# https://github.com/linuxserver/docker-letsencrypt
+  letsencrypt:
+    image: linuxserver/letsencrypt:arm32v7-0.35.1-ls37
+    container_name: letsencrypt
+    restart: unless-stopped
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${USERDIR}/docker_files/letsencrypt/config:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - EMAIL=${USER_EMAIL}
+      - URL=${DUCKDNS_URL}
+      - SUBDOMAINS=wildcard
+      - VALIDATION=duckdns
+      - DUCKDNSTOKEN=${DUCKDNS_TOKEN}
+    cap_add:
+      - NET_ADMIN
+
+# https://github.com/pi-hole/docker-pi-hole/
+  pihole:
+    image: pihole/pihole:4.3.1-4
+    container_name: pihole
+    restart: unless-stopped
+    ports:
+      - 53:53/tcp
+      - 53:53/udp
+      - 8182:80/tcp
+      - 8183:443/tcp
+    volumes:
+      - ${USERDIR}/docker_files/pihole:/etc/pihole
+      - ${USERDIR}/docker_files/pihole/dnsmasq.d:/etc/dnsmasq.d
+    environment:
+      - TZ=${TZ}
+      - WEBPASSWORD=${PIHOLE_PASSWORD}
+      - DNS1=8.8.8.8
+      - DNS2=8.8.4.4
+    dns:
+      - 127.0.0.1
+      - 1.1.1.1
+
+# https://github.com/philhawthorne/ha-dockermon
+  ha-dockermon:
+    image: philhawthorne/ha-dockermon:arm
+    container_name: ha-dockermon
+    restart: unless-stopped
+    ports:
+      - 8126:8126
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${USERDIR}/docker_files/ha-dockermon/config:/config
+
+# https://heimdall.site/
+  heimdall:
+    image: linuxserver/heimdall:arm32v7-60e20c40-ls25
+    container_name: heimdall
+    restart: unless-stopped
+    ports:
+      - 8184:80
+      - 8185:443
+    volumes:
+      - ${USERDIR}/docker_files/heimdall/config:/config
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+
+# nextcloud
+# https://www.smarthomebeginner.com/docker-home-media-server-2018-basic/#Basic_Docker_and_Docker_Compose_Primer
